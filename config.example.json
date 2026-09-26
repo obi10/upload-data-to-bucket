@@ -1,0 +1,17 @@
+{
+  "profile": "DEFAULT",
+  "region": "us-ashburn-1",
+  "namespace": "YOUR_OBJECT_STORAGE_NAMESPACE",
+  "bucket": "YOUR_BUCKET_NAME",
+  "bucket_ocid": "YOUR_BUCKET_OCID",
+  "prefix": "backups/toshiba",
+  "device_friendly_name": "TOSHIBA EXTERNAL_USB USB Device",
+  "partial_root": "C:\\Users\\YOUR_USER\\Music\\file_scanner_usb_COPY_ID",
+  "runtime_dir": "C:\\Users\\YOUR_USER\\AppData\\Local\\upload-data-to-bucket",
+  "bundle_size": 4294967296,
+  "large_file_threshold": 536870912,
+  "part_size": 134217728,
+  "parallel_parts": 4,
+  "reserve_free_space": 5368709120,
+  "tailscale_target": "YOUR_TAILSCALE_DEVICE"
+}

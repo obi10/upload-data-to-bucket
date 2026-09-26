@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+config.json
+state/
+*.sqlite3*
+*.tar
+*.partial

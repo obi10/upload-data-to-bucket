@@ -1,0 +1,8 @@
+[project]
+name = "upload-data-to-bucket"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = ["oci==2.187.0"]
+
+[tool.unittest]
+start-directory = "tests"
