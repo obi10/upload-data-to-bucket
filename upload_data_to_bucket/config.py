@@ -14,6 +14,7 @@ class Settings:
     bucket_ocid: str = ""
     prefix: str = "backups/toshiba"
     device_friendly_name: str = "TOSHIBA EXTERNAL_USB USB Device"
+    device_serial_number: str = ""
     partial_root: str = ""
     runtime_dir: str = ""
     bundle_size: int = 4 * 1024**3

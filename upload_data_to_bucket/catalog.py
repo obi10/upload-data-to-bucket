@@ -144,7 +144,15 @@ class Catalog:
                 (snapshot_id, relative_path, entry_type, sha256, size, mtime_ns, error),
             )
 
-    def pending_contents(self):
+    def pending_contents(self, snapshot_id: str | None = None):
+        # Old hashes whose source changed must not block a newer inventory.
+        if snapshot_id is not None:
+            return self._connection().execute(
+                """SELECT c.* FROM contents c WHERE c.status!='uploaded'
+                   AND c.sha256 IN (SELECT p.sha256 FROM paths p
+                                    WHERE p.snapshot_id=? AND p.entry_type='file')
+                   ORDER BY c.size DESC""", (snapshot_id,),
+            ).fetchall()
         return self._connection().execute(
             "SELECT * FROM contents WHERE status!='uploaded' ORDER BY size DESC"
         ).fetchall()

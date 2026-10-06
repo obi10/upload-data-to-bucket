@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import errno
 import hashlib
 import json
 import os
@@ -22,6 +23,13 @@ class DeviceNotFound(RuntimeError):
 
 class BackupIncomplete(RuntimeError):
     pass
+
+
+class SourceUnavailable(BackupIncomplete):
+    def __init__(self, row, reason):
+        self.sha256 = row["sha256"]
+        self.source_path = row["source_path"]
+        super().__init__(f"{self.source_path}: {reason}")
 
 
 def safe_relative(value: str) -> str:
@@ -85,9 +93,16 @@ class BackupEngine:
         return snapshot_id
 
     def scan_directory(self, root: Path, snapshot_id: str, kind="external") -> int:
+        # Extended Windows paths also allow inventorying names over MAX_PATH.
+        if os.name == "nt" and not str(root).startswith("\\\\?\\"):
+            absolute = str(root.absolute())
+            root = Path("\\\\?\\UNC\\" + absolute[2:] if absolute.startswith("\\\\") else "\\\\?\\" + absolute)
         root = root.resolve(strict=True)
         self.catalog.create_snapshot(snapshot_id, kind, str(root))
+        previous = {row["relative_path"]: row for row in self.catalog.snapshot_paths(snapshot_id)
+                    if row["entry_type"] == "file"}
         self.catalog.clear_snapshot_paths(snapshot_id)
+        self.catalog.set_snapshot_state(snapshot_id, "scanning", errors=0)
         errors = 0
 
         def walk_error(error):
@@ -125,7 +140,14 @@ class BackupEngine:
                     before = path.stat()
                     if not stat.S_ISREG(before.st_mode):
                         raise ValueError("No es un archivo regular")
-                    digest = sha256_file(path)
+                    cached = previous.get(relative)
+                    # Reuse known hashes only when size and nanosecond mtime match.
+                    if (cached is not None and cached["sha256"]
+                            and cached["size"] == before.st_size and cached["mtime_ns"] == before.st_mtime_ns
+                            and self.catalog.content(cached["sha256"]) is not None):
+                        digest = cached["sha256"]
+                    else:
+                        digest = sha256_file(path)
                     after = path.stat()
                     if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                         raise OSError("El archivo cambió durante el inventario")
@@ -139,14 +161,39 @@ class BackupEngine:
         self.catalog.set_snapshot_state(snapshot_id, "scanned", errors=errors)
         return errors
 
-    def upload_pending(self) -> None:
-        pending = list(self.catalog.pending_contents())
+    def upload_pending(self, snapshot_id: str | None = None) -> None:
+        pending = list(self.catalog.pending_contents(snapshot_id))
+        failures = []
+
+        def defer(error):
+            record = {"timestamp": utc_now(), "snapshot": snapshot_id,
+                      "sha256": error.sha256, "source": error.source_path, "error": str(error)}
+            failures.append(record)
+            with (self.settings.runtime_path / "upload-errors.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        def upload_group(rows):
+            # If a source changes while building the TAR, rebuild without that
+            # member. Confirm all stable members and leave the failed hash pending.
+            remaining = list(rows)
+            while remaining:
+                try:
+                    self._upload_bundle(remaining)
+                    return
+                except SourceUnavailable as error:
+                    defer(error)
+                    remaining = [row for row in remaining if row["sha256"] != error.sha256]
+
         large = [row for row in pending if row["size"] > self.settings.large_file_threshold]
         small = [row for row in pending if row["size"] <= self.settings.large_file_threshold]
         for row in large:
             path = Path(row["source_path"])
-            if sha256_file(path) != row["sha256"]:
-                raise BackupIncomplete(f"Cambió el archivo {path}")
+            try:
+                if sha256_file(path) != row["sha256"]:
+                    raise SourceUnavailable(row, "Cambió el archivo")
+            except (OSError, SourceUnavailable) as error:
+                defer(error if isinstance(error, SourceUnavailable) else SourceUnavailable(row, error))
+                continue
             object_name = self.store.name(f"blobs/files/{row['sha256']}")
             etag = self.store.upload_file(path, object_name, row["sha256"])
             self.catalog.mark_content_uploaded(
@@ -157,12 +204,38 @@ class BackupEngine:
         total = 0
         for row in small:
             if group and total + row["size"] > self.settings.bundle_size:
-                self._upload_bundle(group)
+                upload_group(group)
                 group, total = [], 0
             group.append(row)
             total += row["size"]
         if group:
-            self._upload_bundle(group)
+            upload_group(group)
+        self.catalog.set_meta("last_upload_errors", failures)
+        if failures:
+            raise BackupIncomplete(f"Se subieron los contenidos estables; quedan {len(failures)} contenidos modificados o inaccesibles para reintentar")
+
+    def _add_bundle_member(self, archive, row):
+        path = Path(row["source_path"])
+        try:
+            before = path.stat()
+            if before.st_size != row["size"]:
+                raise SourceUnavailable(row, "Cambió el tamaño")
+            info = tarfile.TarInfo(f"blobs/{row['sha256']}")
+            info.size = before.st_size
+            info.mtime = before.st_mtime
+            info.mode = stat.S_IMODE(before.st_mode)
+            with path.open("rb") as source:
+                reader = HashingReader(source)
+                archive.addfile(info, reader)
+            after = path.stat()
+            if reader.digest.hexdigest() != row["sha256"]:
+                raise SourceUnavailable(row, "Cambió SHA-256")
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise SourceUnavailable(row, "Cambió durante la creación del TAR")
+        except OSError as error:
+            if error.errno in (errno.ENOSPC, errno.EDQUOT, errno.EIO):
+                raise
+            raise SourceUnavailable(row, error) from error
 
     def _upload_bundle(self, rows) -> None:
         identity = hashlib.sha256()
@@ -181,24 +254,13 @@ class BackupEngine:
             )
         if not tar_path.exists():
             partial_path.unlink(missing_ok=True)
-            with tarfile.open(partial_path, "w", format=tarfile.PAX_FORMAT) as archive:
-                for row in rows:
-                    path = Path(row["source_path"])
-                    before = path.stat()
-                    if before.st_size != row["size"]:
-                        raise BackupIncomplete(f"Cambió el tamaño de {path}")
-                    info = tarfile.TarInfo(f"blobs/{row['sha256']}")
-                    info.size = before.st_size
-                    info.mtime = before.st_mtime
-                    info.mode = stat.S_IMODE(before.st_mode)
-                    with path.open("rb") as source:
-                        reader = HashingReader(source)
-                        archive.addfile(info, reader)
-                    after = path.stat()
-                    if reader.digest.hexdigest() != row["sha256"]:
-                        raise BackupIncomplete(f"SHA-256 cambió para {path}")
-                    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-                        raise BackupIncomplete(f"El archivo cambió al crear el TAR: {path}")
+            try:
+                with tarfile.open(partial_path, "w", format=tarfile.PAX_FORMAT) as archive:
+                    for row in rows:
+                        self._add_bundle_member(archive, row)
+            except Exception:
+                partial_path.unlink(missing_ok=True)
+                raise
             partial_path.replace(tar_path)
         archive_sha = sha256_file(tar_path)
         object_name = self.store.name(f"blobs/bundles/{archive_sha}.tar")
@@ -247,7 +309,9 @@ class BackupEngine:
         digest = hashlib.sha256(payload).hexdigest()
         object_name = self.store.name(f"manifests/snapshots/{snapshot_id}-{digest}.json.gz")
         self.store.put_bytes(object_name, payload, overwrite=False)
-        self.catalog.set_snapshot_state(snapshot_id, "complete", manifest=object_name)
+        error_count = sum(item["entry_type"] == "error" for item in entries)
+        self.catalog.set_snapshot_state(snapshot_id, "incomplete" if error_count else "complete",
+                                        manifest=object_name, errors=error_count)
         return object_name
 
     def delete_verified_partial(self) -> None:
@@ -266,7 +330,7 @@ class BackupEngine:
             self.catalog.set_meta("partial_cleanup_pending", False)
         if not self.catalog.get_meta("partial_uploaded", False):
             partial_id = self.import_partial()
-            self.upload_pending()
+            self.upload_pending(partial_id)
             partial_manifest = self.publish_snapshot(partial_id)
             self.catalog.set_meta("partial_manifest", partial_manifest)
             # Persistir primero permite retomar una interrupción durante el borrado.
@@ -275,7 +339,11 @@ class BackupEngine:
             self.delete_verified_partial()
             self.catalog.set_meta("partial_cleanup_pending", False)
 
-        roots = find_device_roots(self.settings.device_friendly_name)
+        roots = find_device_roots(
+            self.settings.device_friendly_name,
+            serial_number=self.settings.device_serial_number,
+            diagnostic_path=self.settings.runtime_path / "device-detection.jsonl",
+        )
         if not roots:
             raise DeviceNotFound(self.settings.device_friendly_name)
         # El TOSHIBA esperado tiene una partición; si aparecen varias se separan por letra.
@@ -284,7 +352,7 @@ class BackupEngine:
         for index, root in enumerate(roots, 1):
             snapshot_id = "toshiba-current" if len(roots) == 1 else f"toshiba-current-{index}"
             errors += self.scan_directory(root, snapshot_id)
-            self.upload_pending()
+            self.upload_pending(snapshot_id)
             manifests.append(self.publish_snapshot(snapshot_id))
         latest = {
             "schema": 1,
@@ -294,10 +362,10 @@ class BackupEngine:
             "historical_manifests": [partial_manifest] if partial_manifest else [],
             "errors": errors,
         }
+        if errors:
+            raise BackupIncomplete(f"El inventario terminó con {errors} errores; revisar el catálogo antes de confirmar el respaldo")
         self.store.put_bytes(
             self.store.name("manifests/latest.json"),
             json.dumps(latest, ensure_ascii=False, indent=2).encode("utf-8"),
         )
-        if errors:
-            raise BackupIncomplete(f"El inventario terminó con {errors} errores")
         return latest

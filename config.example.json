@@ -6,6 +6,7 @@
   "bucket_ocid": "YOUR_BUCKET_OCID",
   "prefix": "backups/toshiba",
   "device_friendly_name": "TOSHIBA EXTERNAL_USB USB Device",
+  "device_serial_number": "",
   "partial_root": "C:\\Users\\YOUR_USER\\Music\\file_scanner_usb_COPY_ID",
   "runtime_dir": "C:\\Users\\YOUR_USER\\AppData\\Local\\upload-data-to-bucket",
   "bundle_size": 4294967296,

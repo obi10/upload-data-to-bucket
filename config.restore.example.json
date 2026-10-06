@@ -1,0 +1,8 @@
+{
+  "profile": "DEFAULT",
+  "region": "us-ashburn-1",
+  "namespace": "YOUR_OBJECT_STORAGE_NAMESPACE",
+  "bucket": "YOUR_BUCKET_NAME",
+  "prefix": "backups/toshiba",
+  "runtime_dir": ".restore-state"
+}

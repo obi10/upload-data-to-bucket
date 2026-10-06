@@ -2,6 +2,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 config.json
+config.restore.json
+.restore-state/
+.venv/
 state/
 *.sqlite3*
 *.tar

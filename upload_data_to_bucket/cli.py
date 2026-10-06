@@ -11,6 +11,7 @@ from .catalog import Catalog
 from .config import Settings, load_settings, write_default
 from .lab import run_lab
 from .notify import notify
+from .device import find_device_roots
 from .restore import Restorer
 from .store import OciStore
 
@@ -79,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("backup")
     sub.add_parser("verify")
+    sub.add_parser("diagnose-device")
     restore = sub.add_parser("restore")
     restore.add_argument("--destination", type=Path, required=True)
     restore.add_argument("--manifest", action="append")
@@ -96,6 +98,13 @@ def main(argv=None) -> int:
         write_default(args.output)
         return 0
     settings = load_settings(args.config)
+    if args.command == "diagnose-device":
+        diagnostic_path = settings.runtime_path / "device-detection.jsonl"
+        roots = find_device_roots(settings.device_friendly_name,
+                                  serial_number=settings.device_serial_number,
+                                  diagnostic_path=diagnostic_path)
+        print(json.dumps({"roots": [str(p) for p in roots], "diagnostics": str(diagnostic_path)}, ensure_ascii=False))
+        return 0 if roots else 3
     if args.command == "backup":
         return command_backup(settings)
     if args.command == "verify":
