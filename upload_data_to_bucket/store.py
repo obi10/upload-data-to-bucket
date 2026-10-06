@@ -11,11 +11,12 @@ import oci
 
 from .catalog import Catalog
 from .config import Settings
+from .source_io import open_source, stat_source
 
 
 def sha256_file(path: Path, chunk_size: int = 8 * 1024**2) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    with open_source(path) as stream:
         for chunk in iter(lambda: stream.read(chunk_size), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -62,15 +63,16 @@ class OciStore:
         )
 
     def upload_file(self, path: Path, object_name: str, sha256: str | None = None):
-        path = path.resolve(strict=True)
-        size = path.stat().st_size
+        path = path.absolute()
+        size = stat_source(path).st_size
         sha256 = sha256 or sha256_file(path)
         if self.verified(object_name, sha256, size):
             return self.head(object_name).headers.get("etag")
         if self.head(object_name) is not None:
             raise RuntimeError(f"Colisión remota para {object_name}")
         if size <= self.settings.part_size:
-            data = path.read_bytes()
+            with open_source(path) as stream:
+                data = stream.read()
             response = self.client.put_object(
                 self.namespace, self.bucket, object_name, data,
                 content_length=size,
@@ -116,7 +118,7 @@ class OciStore:
         def send(number: int):
             offset = (number - 1) * part_size
             length = min(part_size, size - offset)
-            with path.open("rb") as stream:
+            with open_source(path) as stream:
                 stream.seek(offset)
                 data = stream.read(length)
             if len(data) != length:

@@ -15,6 +15,7 @@ from .catalog import Catalog, utc_now
 from .config import Settings
 from .device import find_device_roots
 from .store import OciStore, sha256_file
+from .source_io import backup_access, open_source, stat_source, walk_source
 
 
 class DeviceNotFound(RuntimeError):
@@ -114,14 +115,14 @@ class BackupEngine:
                 relative = f"__walk_error__/{errors}"
             self.catalog.add_path(snapshot_id, relative, "error", error=str(error))
 
-        for current, directories, filenames in os.walk(root, topdown=True, followlinks=False, onerror=walk_error):
+        for current, directories, filenames in walk_source(root, onerror=walk_error):
             current_path = Path(current)
             directories.sort(key=str.casefold)
             filenames.sort(key=str.casefold)
             for name in list(directories):
                 path = current_path / name
                 try:
-                    info = path.lstat()
+                    info = stat_source(path)
                     if stat.S_ISLNK(info.st_mode) or (
                         getattr(info, "st_file_attributes", 0)
                         & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
@@ -137,7 +138,7 @@ class BackupEngine:
                 path = current_path / name
                 relative = path.relative_to(root).as_posix()
                 try:
-                    before = path.stat()
+                    before = stat_source(path)
                     if not stat.S_ISREG(before.st_mode):
                         raise ValueError("No es un archivo regular")
                     cached = previous.get(relative)
@@ -148,7 +149,7 @@ class BackupEngine:
                         digest = cached["sha256"]
                     else:
                         digest = sha256_file(path)
-                    after = path.stat()
+                    after = stat_source(path)
                     if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                         raise OSError("El archivo cambió durante el inventario")
                     self.catalog.upsert_content(digest, before.st_size, str(path))
@@ -217,17 +218,17 @@ class BackupEngine:
     def _add_bundle_member(self, archive, row):
         path = Path(row["source_path"])
         try:
-            before = path.stat()
+            before = stat_source(path)
             if before.st_size != row["size"]:
                 raise SourceUnavailable(row, "Cambió el tamaño")
             info = tarfile.TarInfo(f"blobs/{row['sha256']}")
             info.size = before.st_size
             info.mtime = before.st_mtime
             info.mode = stat.S_IMODE(before.st_mode)
-            with path.open("rb") as source:
+            with open_source(path) as source:
                 reader = HashingReader(source)
                 archive.addfile(info, reader)
-            after = path.stat()
+            after = stat_source(path)
             if reader.digest.hexdigest() != row["sha256"]:
                 raise SourceUnavailable(row, "Cambió SHA-256")
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
@@ -349,11 +350,13 @@ class BackupEngine:
         # El TOSHIBA esperado tiene una partición; si aparecen varias se separan por letra.
         errors = 0
         manifests = []
-        for index, root in enumerate(roots, 1):
-            snapshot_id = "toshiba-current" if len(roots) == 1 else f"toshiba-current-{index}"
-            errors += self.scan_directory(root, snapshot_id)
-            self.upload_pending(snapshot_id)
-            manifests.append(self.publish_snapshot(snapshot_id))
+        with backup_access(roots, enabled=self.settings.windows_backup_read,
+                           diagnostic_path=self.settings.runtime_path / "backup-access.jsonl"):
+            for index, root in enumerate(roots, 1):
+                snapshot_id = "toshiba-current" if len(roots) == 1 else f"toshiba-current-{index}"
+                errors += self.scan_directory(root, snapshot_id)
+                self.upload_pending(snapshot_id)
+                manifests.append(self.publish_snapshot(snapshot_id))
         latest = {
             "schema": 1,
             "updated_at": utc_now(),

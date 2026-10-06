@@ -15,6 +15,7 @@ class Settings:
     prefix: str = "backups/toshiba"
     device_friendly_name: str = "TOSHIBA EXTERNAL_USB USB Device"
     device_serial_number: str = ""
+    windows_backup_read: bool = False
     partial_root: str = ""
     runtime_dir: str = ""
     bundle_size: int = 4 * 1024**3

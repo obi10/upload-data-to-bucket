@@ -6,6 +6,7 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $taskName = 'Upload_TOSHIBA_OCI_20261006_RETRY'
 $previousName = 'Upload_TOSHIBA_OCI_20260930_TO_20261002_RETRY'
 $previous = Get-ScheduledTask -TaskName $previousName
+$principal = New-ScheduledTaskPrincipal -UserId $previous.Principal.UserId -LogonType Interactive -RunLevel Highest
 $action = New-ScheduledTaskAction -Execute 'C:\o\Scripts\pythonw.exe' -Argument (
     '-X utf8 "' + (Join-Path $projectRoot 'run.py') + '" --config "' +
     (Join-Path $projectRoot 'config.json') + '" backup'
@@ -21,7 +22,7 @@ $settings = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -WakeToRun 
     -MultipleInstances IgnoreNew -ExecutionTimeLimit ([timespan]::Zero) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $definition = New-ScheduledTask -Action $action -Trigger $triggers -Settings $settings `
-    -Principal $previous.Principal -Description 'Completar contenidos pendientes de TOSHIBA en OCI el 6 de octubre, 09:00 a 14:30 Lima.'
+    -Principal $principal -Description 'Completar contenidos pendientes de TOSHIBA en OCI el 6 de octubre, 09:00 a 14:30 Lima.'
 Register-ScheduledTask -TaskName $taskName -InputObject $definition -Force | Out-Null
 Disable-ScheduledTask -TaskName $previousName | Out-Null
 $registered = Get-ScheduledTask -TaskName $taskName

@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import traceback
+import tempfile
 from pathlib import Path
 
 from .backup import BackupEngine, BackupIncomplete, DeviceNotFound
@@ -12,6 +13,7 @@ from .config import Settings, load_settings, write_default
 from .lab import run_lab
 from .notify import notify
 from .device import find_device_roots
+from .source_io import backup_access, open_source
 from .restore import Restorer
 from .store import OciStore
 
@@ -81,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("backup")
     sub.add_parser("verify")
     sub.add_parser("diagnose-device")
+    sub.add_parser("diagnose-access")
     restore = sub.add_parser("restore")
     restore.add_argument("--destination", type=Path, required=True)
     restore.add_argument("--manifest", action="append")
@@ -98,6 +101,25 @@ def main(argv=None) -> int:
         write_default(args.output)
         return 0
     settings = load_settings(args.config)
+    if args.command == "diagnose-access":
+        # Tests the actual execution token with generated data only; no OCI/disks.
+        settings.runtime_path.mkdir(parents=True, exist_ok=True)
+        report = {"status": "error"}
+        try:
+            with tempfile.TemporaryDirectory(prefix="access-check-", dir=settings.runtime_path) as temp:
+                path = Path(temp) / "sample.txt"
+                path.write_bytes(b"backup access check")
+                with backup_access([Path(temp)], enabled=True):
+                    with open_source(path) as stream:
+                        if stream.read() != b"backup access check":
+                            raise RuntimeError("La lectura de laboratorio no coincide")
+            report = {"status": "ok", "SeBackupPrivilege": "enabled_and_restored"}
+        except Exception as error:
+            report["error"] = str(error)
+        (settings.runtime_path / "backup-access-check.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["status"] == "ok" else 2
     if args.command == "diagnose-device":
         diagnostic_path = settings.runtime_path / "device-detection.jsonl"
         roots = find_device_roots(settings.device_friendly_name,

@@ -44,6 +44,39 @@ Código 0: disco identificado y accesible. Código 3: no hay un volumen accesibl
 esto no prueba que el disco estuviera desconectado. Los errores de consulta se registran
 y provocan un fallo, sin confirmar el respaldo. Los discos del sistema se excluyen.
 
+## Lectura de carpetas con permisos restringidos
+
+En Windows, `windows_backup_read: true` activa `SeBackupPrivilege` para leer las raíces
+del disco identificado. Requiere que la tarea se ejecute con `RunLevel Highest` y que
+la cuenta disponga de ese privilegio. Se comprueba `ERROR_NOT_ALL_ASSIGNED`; si Windows
+no concede el privilegio, se registra un error y no se declara completo el respaldo.
+
+El inventario usa handles con `FILE_FLAG_BACKUP_SEMANTICS` y
+`GetFileInformationByHandleEx`; la lectura de archivos utiliza handles de solo lectura.
+No se cambian ACL ni propietarios, no se habilita `SeRestorePrivilege` y no se siguen
+reparse points. El acceso especial se limita a las raíces detectadas y se restaura el
+estado anterior del privilegio al salir del contexto. Cada intento registra su activación
+en `runtime_dir/backup-access.jsonl`.
+
+Un bloqueo exclusivo de una aplicación, cifrado sin clave o un fallo del dispositivo
+puede seguir impidiendo una lectura. No se cierran aplicaciones automáticamente, no se
+crean instantáneas VSS y no se excluyen archivos del respaldo para ocultar esos errores.
+Conviene cerrar Excel y otras aplicaciones que escriban al TOSHIBA durante el respaldo.
+
+Para verificar únicamente el privilegio del proceso con un archivo generado de laboratorio:
+
+```powershell
+& 'C:\o\Scripts\python.exe' run.py --config config.json diagnose-access
+```
+
+El resultado se guarda en `runtime_dir/backup-access-check.json`. Ejecutar este diagnóstico
+en una consola limitada puede fallar aunque la tarea con elevación funcione correctamente.
+Para instalar la tarea con elevación, ejecuta su script desde PowerShell como administrador.
+
+Referencias: [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew),
+[privilegios de Windows](https://learn.microsoft.com/en-us/windows/win32/secauthz/privilege-constants),
+[enumeración por handle](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex).
+
 ## Restaurar en otro disco externo
 
 Consulta la **[guía de restauración para Windows y macOS](docs/RESTAURAR.md)**.
