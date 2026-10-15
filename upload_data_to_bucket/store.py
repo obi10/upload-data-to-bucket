@@ -6,6 +6,7 @@ import io
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Callable
 
 import oci
 
@@ -181,12 +182,17 @@ class OciStore:
         response = self.client.get_object(self.namespace, self.bucket, object_name)
         return response.data.content
 
-    def download(self, object_name: str, destination: Path) -> None:
+    def download(self, object_name: str, destination: Path,
+                 on_chunk: Callable[[int], None] | None = None) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         response = self.client.get_object(self.namespace, self.bucket, object_name)
+        downloaded = 0
         with destination.open("wb") as output:
             for chunk in response.data.raw.stream(8 * 1024**2, decode_content=False):
                 output.write(chunk)
+                downloaded += len(chunk)
+                if on_chunk is not None:
+                    on_chunk(downloaded)
 
     def list_objects(self, prefix: str):
         response = oci.pagination.list_call_get_all_results(
