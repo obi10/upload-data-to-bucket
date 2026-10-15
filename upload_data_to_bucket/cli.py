@@ -14,7 +14,7 @@ from .lab import run_lab
 from .notify import notify
 from .device import find_device_roots
 from .source_io import backup_access, open_source
-from .restore import Restorer
+from .restore import Restorer, RestorePaused
 from .store import OciStore
 
 
@@ -88,7 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--destination", type=Path, required=True)
     restore.add_argument("--manifest", action="append")
     restore.add_argument("--include-historical", action="store_true")
-    restore.add_argument("--overwrite", action="store_true")
+    existing = restore.add_mutually_exclusive_group()
+    existing.add_argument("--overwrite", action="store_true")
+    existing.add_argument("--resume", action="store_true",
+                          help="Verifica y omite archivos ya completos; no los reemplaza")
+    restore.add_argument("--progress-file", type=Path,
+                         help="Bitácora JSONL de objetos y archivos verificados/restaurados")
+    restore.add_argument("--pause-file", type=Path,
+                         help="Pausa de forma segura cuando aparece este archivo")
     sub.add_parser("lab-test")
     init = sub.add_parser("init-config")
     init.add_argument("--output", type=Path, required=True)
@@ -138,7 +145,18 @@ def main(argv=None) -> int:
         _, store = components(settings)
         restorer = Restorer(settings, store)
         manifests = args.manifest or restorer.latest_manifest_names(args.include_historical)
-        result = restorer.restore(args.destination, manifests, overwrite=args.overwrite)
+        progress_file = args.progress_file
+        if args.resume and progress_file is None:
+            progress_file = settings.runtime_path / "restore-progress.jsonl"
+        try:
+            result = restorer.restore(
+                args.destination, manifests, overwrite=args.overwrite,
+                resume=args.resume, progress_file=progress_file, pause_file=args.pause_file,
+            )
+        except RestorePaused as error:
+            print(json.dumps({"estado": "pausada", "detalle": str(error),
+                              "registro_progreso": str(progress_file)}, ensure_ascii=False))
+            return 4
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     return 2

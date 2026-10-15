@@ -180,8 +180,36 @@ Deja conectado el destino y mantén el proceso activo hasta recibir el resumen. 
 o una desconexión significa que esa ejecución no terminó.
 
 Por defecto, el programa se detiene si encuentra un archivo ya existente, para evitar
-reemplazarlo. Para volver a ejecutar una restauración interrumpida **en la misma carpeta
-dedicada al respaldo**, repite el mismo comando añadiendo `--overwrite`:
+reemplazarlo. Para continuar una restauración interrumpida **en la misma carpeta dedicada
+al respaldo**, usa `--resume`. Esta opción verifica el SHA-256 de cada archivo existente
+contra el manifiesto y lo omite si coincide. Si un archivo existente difiere, se detiene sin
+reemplazarlo. Un objeto OCI no se vuelve a descargar cuando todos sus archivos están
+verificados; si quedó un objeto completo en `.oci-restore-cache`, se reutiliza. Un objeto
+cuya descarga quedó incompleta puede tener que descargarse de nuevo.
+
+```powershell
+# Ejemplo Windows: conserva exactamente el manifiesto de la primera sesión.
+& .\.venv\Scripts\python.exe run.py --config config.restore.json restore `
+  --destination '\\?\E:\Restaurado-TOSHIBA' --manifest 'NOMBRE_DEL_MANIFIESTO' `
+  --resume --progress-file 'E:\restore-progress.jsonl' `
+  --pause-file 'E:\restore.pause'
+```
+
+El registro JSONL anota inicio/fin de cada ejecución, objetos descargados o reutilizados y
+cada archivo restaurado o verificado. La salida final incluye el total válido en
+`archivos_restaurados`, además de `archivos_nuevos` y `archivos_ya_verificados`.
+Para solicitar una pausa, crea el archivo indicado en `--pause-file`. El programa se detiene
+entre archivos y devuelve el código 4; **espera a que termine el proceso antes de apagar o
+desconectar el disco**. Retira ese archivo antes de reanudar. Si Windows se apaga de golpe,
+los archivos finales ya verificados permanecen; un `.restoring` u objeto parcial se rehace
+en la siguiente sesión. La descarga comprueba la pausa entre fragmentos y registra el avance
+cada 128 MiB; una operación de red bloqueada o una copia de un archivo grande puede tardar
+en atenderla. La parte descargada de un objeto incompleto se vuelve a bajar al reanudar.
+
+`--overwrite` sigue disponible para reemplazar deliberadamente los archivos coincidentes,
+pero no debe confundirse con `--resume`. Para usarlo tras una interrupción, repite el mismo
+comando en una carpeta dedicada y ten presente que reprocesa archivos y puede descargar
+objetos otra vez:
 
 ```bash
 # Ejemplo macOS, para el respaldo final
@@ -197,8 +225,8 @@ dedicada al respaldo**, repite el mismo comando añadiendo `--overwrite`:
 
 Si estabas restaurando una instantánea parcial, conserva también su argumento `--manifest`.
 `--overwrite` reemplaza archivos coincidentes: no lo uses sobre una carpeta con cambios que
-quieras conservar. Esta restauración vuelve a procesar archivos y puede descargar objetos
-otra vez; no ofrece la reanudación por partes del comando de subida `backup`.
+quieras conservar. La descarga de un objeto individual no se reanuda byte a byte: `--resume`
+opera a nivel de archivo verificado y objeto OCI completo.
 
 Durante la restauración se calcula el SHA-256 de cada objeto descargado y de cada archivo
 reconstruido. Un fallo de checksum detiene el comando. Al terminar verás un JSON como:

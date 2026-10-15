@@ -80,6 +80,8 @@ Referencias: [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/f
 ## Restaurar en otro disco externo
 
 Consulta la **[guía de restauración para Windows y macOS](docs/RESTAURAR.md)**.
+Para continuar la restauración de este mismo TOSHIBA desde otra laptop Windows o Linux,
+consulta la [guía de reanudación entre computadoras](docs/REANUDAR_EN_OTRA_COMPUTADORA.md).
 Incluye instalación, configuración OCI, selección del disco de destino, recuperación de
 copias parciales, respaldo completo, reanudación y comprobación de resultados.
 La plantilla [config.restore.example.json](config.restore.example.json) permite preparar

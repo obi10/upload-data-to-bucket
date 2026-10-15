@@ -42,9 +42,11 @@ class FakeStore:
     def get_bytes(self, object_name):
         return self._path(object_name).read_bytes()
 
-    def download(self, object_name, destination):
+    def download(self, object_name, destination, on_chunk=None):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self._path(object_name), destination)
+        if on_chunk is not None:
+            on_chunk(destination.stat().st_size)
 
     def verified(self, object_name, digest, size):
         path = self._path(object_name)
